@@ -16,7 +16,7 @@ tf.reset_default_graph()
 parser = argparse.ArgumentParser()
 
 # Basic model parameters.
-parser.add_argument('--batch_size', type=int, default=1,
+parser.add_argument('--batch_size', type=int, default=8,
                     help='Number of images to process in a batch')
 
 parser.add_argument('--data_dir', type=str, default='/home/cvgl_ros/Documents/parth/',
@@ -37,10 +37,11 @@ parser.add_argument(
          'automatically based on whether TensorFlow was built for CPU or GPU.')
 
 _NUM_IMAGES = {
-    'train': 6912/2,
-    'validation': 1718/2,
+    'train': 6900/2,
+    'validation': 1730/2,
 }
 
+log_path = "/home/cvgl_ros/Documents/parth/1"
 
 test_images_file = np.load("data_images_test.npz")
 test_images = test_images_file["arr_0"]
@@ -63,36 +64,39 @@ print(train_binaries.shape)
 test_images = test_images / 255.
 train_images = train_images / 255.
 
-# sess = tf.Session()
-
-# def gen(images, flows):
-#   for i in itertools.count(0):
-#     yield images[i], flows[i]
-
-# dataset = tf.data.Dataset.from_generator(
-#     gen, (tf.float32, tf.float32))
-# value = dataset.make_one_shot_iterator().get_next()
-
-# sess.run(value)
-# sess.run(value)
 
 #################################
-def input_fn(is_training, images_filename, flows_filename, batch_size=1, num_epochs=1):
+def input_fn(is_training, images_filename, flows_filename, batch_size=8, num_epochs=10):
   """A simple input_fn using the tf.data input pipeline."""
 
   def gen():
-    for i in itertools.count(0):
-      i = i % 3456
-      a = random.randint(0,239)
-      b = random.randint(0,319)
+    a = random.randint(0,239)
+    b = random.randint(0,319)
 
-      image = images_filename[i]
-      image = np.expand_dims(image, axis=0)
-      image = image[:,a:a+240,b:b+320,:]
-      labels = flows_filename[i]
-      labels = np.expand_dims(labels, axis=0)
-      labels = labels[:,a:a+240,b:b+320,:]
-      yield image, labels
+    if is_training:
+      for j in itertools.count(0, batch_size):
+        j = j % 3450
+        if j > 3450 - batch_size:
+          image = np.concatenate((images_filename[j:3450],images_filename[1:(j+batch_size)%3450]), axis=0)
+          labels = np.concatenate((flows_filename[j:3450],flows_filename[1:(j+batch_size)%3450]), axis=0)
+          image = image[:,a:a+240,b:b+320,:]
+          labels = labels[:,a:a+240,b:b+320,:]
+          yield image, labels
+        else:
+          image = images_filename[j:j+batch_size]
+          labels = flows_filename[j:j+batch_size]
+          image = image[:,a:a+240,b:b+320,:]
+          labels = labels[:,a:a+240,b:b+320,:]
+          yield image, labels
+    else:
+      for i in itertools.count(0):
+        image = images_filename[i]
+        image = np.expand_dims(image, axis=0)
+        labels = flows_filename[i]
+        labels = np.expand_dims(labels, axis=0)
+        image = image[:,a:a+240,b:b+320,:]
+        labels = labels[:,a:a+240,b:b+320,:]
+        yield image, labels
 
   # sess = tf.Session()
 
@@ -122,8 +126,7 @@ def input_fn(is_training, images_filename, flows_filename, batch_size=1, num_epo
   # images, flows = iterator.get_next()
 
   dataset = tf.data.Dataset.from_generator(
-      gen, (tf.float32, tf.float32),
-      (tf.TensorShape([1, 240, 320, 6]), tf.TensorShape([1, 240, 320, 2])))
+      gen, (tf.float32, tf.float32))
   images, flows =  dataset.make_one_shot_iterator().get_next()
 
   return images, flows
@@ -160,14 +163,14 @@ def flow_model(inputs, mode, data_format):
       strides=[2, 2],
       padding='same',
       activation=None,
-      data_format=data_format)
-
+      data_format=data_format,
+      name = 'conv1' )
   
   conv1 = tf.maximum(conv1,tf.scalar_mul(tf.constant(0.1),conv1))
 
 
   # Convolutional Layer #2
-  # Computes 128 features using a 3x3 filter with stride of 2x2.
+  # Computes 128 features using a 5x5 filter with stride of 2x2.
   # Activation simulates a leaky ReLU layer.
   # Padding is added to preserve width and height.
   # Input Tensor Shape: [batch_size, 120, 160, 64]
@@ -175,11 +178,12 @@ def flow_model(inputs, mode, data_format):
   conv2 = tf.layers.conv2d(
       inputs=conv1,
       filters=128,
-      kernel_size=[3, 3],
+      kernel_size=[5, 5],
       strides=[2, 2],
       padding='same',
       activation=None,
-      data_format=data_format)
+      data_format=data_format,
+      name = 'conv2')
 
   conv2 = tf.maximum(conv2,tf.scalar_mul(tf.constant(0.1),conv2))
 
@@ -196,33 +200,91 @@ def flow_model(inputs, mode, data_format):
       strides=[2, 2],
       padding='same',
       activation=None,
-      data_format=data_format)
+      data_format=data_format,
+      name = 'conv3')
 
   conv3 = tf.maximum(conv3,tf.scalar_mul(tf.constant(0.1),conv3))  
+
+  # Convolutional Layer #3_1
+  # Computes 256 features using a 3x3 filter with stride of 1x1.
+  # Activation simulates a leaky ReLU layer.
+  # Padding is added to preserve width and height.
+  # Input Tensor Shape: [batch_size, 30, 40, 256]
+  # Output Tensor Shape: [batch_size, 30, 40, 256]
+  conv3_1 = tf.layers.conv2d(
+      inputs=conv3,
+      filters=256,
+      kernel_size=[3, 3],
+      strides=[1, 1],
+      padding='same',
+      activation=None,
+      data_format=data_format,
+      name='conv3_1')
+
+  conv3_1 = tf.maximum(conv3_1,tf.scalar_mul(tf.constant(0.1),conv3_1))
+
+
+  # Convolutional Layer #4
+  # Computes 512 features using a 3x3 filter with stride of 2x2.
+  # Activation simulates a leaky ReLU layer.
+  # Padding is added to preserve width and height.
+  # Input Tensor Shape: [batch_size, 30, 50, 256]
+  # Output Tensor Shape: [batch_size, 15, 20, 512]
+  conv4 = tf.layers.conv2d(
+      inputs=conv3_1,
+      filters=512,
+      kernel_size=[3, 3],
+      strides=[2, 2],
+      padding='same',
+      activation=None,
+      data_format=data_format,
+      name = 'conv4')
+
+  conv4 = tf.maximum(conv4,tf.scalar_mul(tf.constant(0.1),conv4))  
+
+  # Convolutional Layer #4_1
+  # Computes 512 features using a 3x3 filter with stride of 1x1.
+  # Activation simulates a leaky ReLU layer.
+  # Padding is added to preserve width and height.
+  # Input Tensor Shape: [batch_size, 15, 20, 512]
+  # Output Tensor Shape: [batch_size, 15, 20, 512]
+  conv4_1 = tf.layers.conv2d(
+      inputs=conv4,
+      filters=512,
+      kernel_size=[3, 3],
+      strides=[1, 1],
+      padding='same',
+      activation=None,
+      data_format=data_format,
+      name='conv4_1')
+
+  conv4_1 = tf.maximum(conv4_1,tf.scalar_mul(tf.constant(0.1),conv4_1))
+
 
   # Predict Flow #1
   # Computes 2 features using a 3x3 filter with stride of 1x1.
   # No activation layer.
   # Padding is added to preserve width and height.
-  # Input Tensor Shape: [batch_size, 30, 40, 256]
-  # Output Tensor Shape: [batch_size, 30, 40, 2]
+  # Input Tensor Shape: [batch_size, 15, 20, 512]
+  # Output Tensor Shape: [batch_size, 15, 20, 2]
   pred1 = tf.layers.conv2d(
-      inputs=conv3,
+      inputs=conv4_1,
       filters=2,
       kernel_size=[3, 3],
       strides=[1, 1],
       padding='same',
       activation=None,
-      data_format=data_format)
+      data_format=data_format,
+      name='pred1')
 
   pred1 = tf.transpose(pred1, [0, 2, 3, 1])
 
   # Upsample #1
   # Increases image dimensions by double.
-  # Input Tensor Shape: [batch_size, 30, 40, 2]
-  # Output Tensor Shape: [batch_size, 60, 80, 2]
+  # Input Tensor Shape: [batch_size, 15, 20, 2]
+  # Output Tensor Shape: [batch_size, 30, 40, 2]
   upsample1 = tf.image.resize_images(pred1,
-  	  [60, 80],
+  	  [30, 40],
   	  method=tf.image.ResizeMethod.BILINEAR,
   	  align_corners=False)
 
@@ -232,28 +294,29 @@ def flow_model(inputs, mode, data_format):
   # Computes 128 features using a 5x5 filter with stride of 2x2.
   # Activation simulates a leaky ReLU layer.
   # Padding is added to preserve width and height.
-  # Input Tensor Shape: [batch_size, 30, 40, 256]
-  # Output Tensor Shape: [batch_size, 60, 80, 128]
+  # Input Tensor Shape: [batch_size, 15, 20, 512]
+  # Output Tensor Shape: [batch_size, 30, 40, 256]
   upconv1 = tf.layers.conv2d_transpose(
-  	  inputs=conv3,
-  	  filters=128,
+  	  inputs=conv4_1,
+  	  filters=256,
   	  kernel_size=[5, 5],
   	  strides=[2, 2],
   	  padding='same',
   	  activation=None,
-  	  data_format=data_format)
+  	  data_format=data_format,
+          name='upconv1')
 
   upconv1 = tf.maximum(upconv1,tf.scalar_mul(tf.constant(0.1),upconv1))  
 
-  concat1 = tf.concat([upconv1, conv2, upsample1],
+  concat1 = tf.concat([upconv1, conv3_1, upsample1],
   	  1)
 
   # Predict Flow #2
   # Computes 2 features using a 3x3 filter with stride of 1x1.
   # No activation layer.
   # Padding is added to preserve width and height.
-  # Input Tensor Shape: [batch_size, 60, 80, 258]
-  # Output Tensor Shape: [batch_size, 60, 80, 2]
+  # Input Tensor Shape: [batch_size, 30, 40, 514]
+  # Output Tensor Shape: [batch_size, 30, 40, 2]
   pred2 = tf.layers.conv2d(
       inputs=concat1,
       filters=2,
@@ -261,27 +324,28 @@ def flow_model(inputs, mode, data_format):
       strides=[1, 1],
       padding='same',
       activation=None,
-      data_format=data_format)
+      data_format=data_format,
+      name='pred2')
 
   pred2 = tf.transpose(pred2, [0, 2, 3, 1])
 
   # Upsample #2
   # Increases image dimensions by double.
-  # Input Tensor Shape: [batch_size, 60, 80, 2]
-  # Output Tensor Shape: [batch_size, 120, 160, 2]
+  # Input Tensor Shape: [batch_size, 30, 40, 2]
+  # Output Tensor Shape: [batch_size, 60, 80, 2]
   upsample2 = tf.image.resize_images(pred2,
-  	  [120, 160],
+  	  [60, 80],
   	  method=tf.image.ResizeMethod.BILINEAR,
   	  align_corners=False)
 
   upsample2 = tf.transpose(upsample2, [0, 3, 1, 2])
 
   # Upconvolutional Layer #2
-  # Computes 64 features using a 5x5 filter with stride of 2x2.
+  # Computes 128 features using a 5x5 filter with stride of 2x2.
   # Activation simulates a leaky ReLU layer.
   # Padding is added to preserve width and height.
-  # Input Tensor Shape: [batch_size, 60, 80, 128]
-  # Output Tensor Shape: [batch_size, 120, 160, 64]
+  # Input Tensor Shape: [batch_size, 30, 40, 256]
+  # Output Tensor Shape: [batch_size, 60, 80, 128]
   upconv2 = tf.layers.conv2d_transpose(
   	  inputs=upconv1,
   	  filters=128,
@@ -289,19 +353,20 @@ def flow_model(inputs, mode, data_format):
   	  strides=[2, 2],
   	  padding='same',
   	  activation=None,
-  	  data_format=data_format)
+  	  data_format=data_format,
+          name='upconv2')
 
   upconv2 = tf.maximum(upconv2,tf.scalar_mul(tf.constant(0.1),upconv2))  
 
-  concat2 = tf.concat([upconv2, conv1, upsample2],
+  concat2 = tf.concat([upconv2, conv2, upsample2],
   	  1)
 
   # Predict Flow #3
   # Computes 2 features using a 3x3 filter with stride of 1x1.
   # No activation layer.
   # Padding is added to preserve width and height.
-  # Input Tensor Shape: [batch_size, 120, 160, 130]
-  # Output Tensor Shape: [batch_size, 120, 160, 2]
+  # Input Tensor Shape: [batch_size, 60, 80, 258]
+  # Output Tensor Shape: [batch_size, 60, 80, 2]
   pred3 = tf.layers.conv2d(
       inputs=concat2,
       filters=2,
@@ -309,21 +374,72 @@ def flow_model(inputs, mode, data_format):
       strides=[1, 1],
       padding='same',
       activation=None,
-      data_format=data_format)
+      data_format=data_format,
+      name='pred3')
 
   pred3 = tf.transpose(pred3, [0, 2, 3, 1])
 
   # Upsample #3
   # Increases image dimensions by double.
+  # Input Tensor Shape: [batch_size, 60, 80, 2]
+  # Output Tensor Shape: [batch_size, 120, 160, 2]
+  upsample3 = tf.image.resize_images(pred3,
+  	  [120, 160],
+  	  method=tf.image.ResizeMethod.BILINEAR,
+  	  align_corners=False)
+
+  upsample3 = tf.transpose(upsample3, [0, 3, 1, 2])
+
+  # Upconvolutional Layer #3
+  # Computes 64 features using a 5x5 filter with stride of 2x2.
+  # Activation simulates a leaky ReLU layer.
+  # Padding is added to preserve width and height.
+  # Input Tensor Shape: [batch_size, 60, 80, 128]
+  # Output Tensor Shape: [batch_size, 120, 160, 64]
+  upconv3 = tf.layers.conv2d_transpose(
+  	  inputs=upconv2,
+  	  filters=128,
+  	  kernel_size=[5, 5],
+  	  strides=[2, 2],
+  	  padding='same',
+  	  activation=None,
+  	  data_format=data_format,
+          name='upconv3')
+
+  upconv3 = tf.maximum(upconv3,tf.scalar_mul(tf.constant(0.1),upconv3))  
+
+  concat3 = tf.concat([upconv3, conv1, upsample3],
+  	  1)
+
+  # Predict Flow #4
+  # Computes 2 features using a 3x3 filter with stride of 1x1.
+  # No activation layer.
+  # Padding is added to preserve width and height.
+  # Input Tensor Shape: [batch_size, 120, 160, 130]
+  # Output Tensor Shape: [batch_size, 120, 160, 2]
+  pred4 = tf.layers.conv2d(
+      inputs=concat3,
+      filters=2,
+      kernel_size=[3, 3],
+      strides=[1, 1],
+      padding='same',
+      activation=None,
+      data_format=data_format,
+      name='pred4')
+
+  pred4 = tf.transpose(pred4, [0, 2, 3, 1])
+
+  # Upsample #4
+  # Increases image dimensions by double.
   # Input Tensor Shape: [batch_size, 120, 160, 2]
   # Output Tensor Shape: [batch_size, 240, 320, 2]
-  upsample3 = tf.image.resize_images(pred3,
+  upsample4 = tf.image.resize_images(pred4,
   	  [240, 320],
   	  method=tf.image.ResizeMethod.BILINEAR,
   	  align_corners=False)
 
 
-  return upsample3
+  return upsample4
 
 ######### THIS FUNCTION BELOW NEEDS TO BE MODIFIED ######################
 
@@ -333,39 +449,44 @@ def flow_model(inputs, mode, data_format):
 
 def flow_model_fn(features, labels, mode, params):
   """Model function for MNIST."""
-  upsample2 = flow_model(features, mode, params['data_format'])
+  output = flow_model(features, mode, params['data_format'])
 
   # predictions = {
   #     'classes': tf.argmax(input=logits, axis=1),
   #     'probabilities': tf.nn.softmax(logits, name='softmax_tensor')
   # }
 
-  predictions = {"results": upsample2[0]}
+  predictions = {"results": output[0]}
 
   if mode == tf.estimator.ModeKeys.PREDICT:
     return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
   #loss = tf.losses.softmax_cross_entropy(onehot_labels=labels, logits=logits)
   
-  diff = tf.subtract(labels[0], upsample2[0])
+  diff = tf.subtract(labels[0], output[0])
 
   loss = tf.nn.l2_loss(diff)
+
+  loss_x_1 = tf.nn.l2_loss(tf.subtract(labels[0,:,:,0], output[0,:,:,0]))
+  loss_y_1 = tf.nn.l2_loss(tf.subtract(labels[0,:,:,1], output[0,:,:,1]))
+
+  tf.identity(loss_x_1, name='loss_x_1')
+  tf.summary.scalar('loss_x_1', loss_x_1)
+
+  tf.identity(loss_y_1, name='loss_y_1')
+  tf.summary.scalar('loss_y_1', loss_y_1)
 
   # Configure the training op
   if mode == tf.estimator.ModeKeys.TRAIN:
     optimizer = tf.train.AdamOptimizer(learning_rate=1e-4)
+    grad_and_vars = optimizer.compute_gradients(loss, tf.trainable_variables())
+    for g, v in grad_and_vars:
+      tf.check_numerics(g, 'nan')
     train_op = optimizer.minimize(loss, tf.train.get_or_create_global_step())
   else:
     train_op = None
 
-  # accuracy = tf.metrics.accuracy(
-  #     tf.argmax(labels, axis=1), predictions['classes'])
-  #  metrics = {'accuracy': accuracy}
-
-  # AEE = tf.scalar_mul(tf.constant(1.0/(640*480)), loss)
-  # metrics = {'AEE': AEE}
-
-  accuracy = tf.metrics.mean_absolute_error(labels[0], upsample2[0])
+  accuracy = tf.metrics.mean_absolute_error(labels[0], output[0])
   metrics = {'AEE': accuracy}
 
   # Create a tensor named train_accuracy for logging purposes
@@ -398,7 +519,9 @@ def main(unused_argv):
 
   # Set up training hook that logs the training accuracy every 100 steps.
   tensors_to_log = {
-      'train_accuracy': 'train_accuracy'
+      'train_accuracy': 'train_accuracy',
+      'loss_x_1': 'loss_x_1',
+      'loss_y_1': 'loss_y_1',
   }
   logging_hook = tf.train.LoggingTensorHook(
       tensors=tensors_to_log, every_n_iter=100)
@@ -406,19 +529,20 @@ def main(unused_argv):
   ###########FIND A WAY TO ONLY TEST INPUT FN######################
   # LOAD DATA AND PASS IT INTO INPUT FN
 
+  # writer = tf.summary.FileWriter(log_path)
   
   # Train the model
   flow_classifier.train(
       input_fn=lambda: input_fn(
           True, train_images, train_binaries, FLAGS.batch_size, FLAGS.train_epochs),
-      steps = 3456*10, hooks=[logging_hook])
+      steps = 3450*480/8, hooks=[logging_hook])
 
   # summary_writer = tf.train.SummaryWriter("/tensorflow/logdir", sess.graph_def)
 
   # Evaluate the model and print results
   eval_results = flow_classifier.evaluate(
       input_fn=lambda: input_fn(False, test_images, test_binaries, FLAGS.batch_size),
-      steps = 859)
+      steps = 865)
   print()
   print('Evaluation results:\n\t%s' % eval_results)
 
